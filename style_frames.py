@@ -1,6 +1,7 @@
 # Brycen Westgarth and Tristan Jogminas
 # March 5, 2021
 import os
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow_hub as hub
 import numpy as np
@@ -10,8 +11,8 @@ import cv2
 import logging
 from config import Config
 
-class StyleFrame:
 
+class StyleFrame:
     MAX_CHANNEL_INTENSITY = 255.0
 
     def __init__(self, conf=Config):
@@ -22,14 +23,14 @@ class StyleFrame:
         self.output_frame_directory = glob.glob(f'{self.conf.OUTPUT_FRAME_DIRECTORY}/*')
         self.style_directory = glob.glob(f'{self.conf.STYLE_REF_DIRECTORY}/*')
         self.ref_count = len(self.conf.STYLE_SEQUENCE)
-
+        self.apply_mask=self.conf.APPLY_MASK
         files_to_be_cleared = self.output_frame_directory
         if self.conf.CLEAR_INPUT_FRAME_CACHE:
             files_to_be_cleared += self.input_frame_directory
-        
+
         for file in files_to_be_cleared:
             os.remove(file)
-        
+
         # Update contents of directory after deletion
         self.input_frame_directory = glob.glob(f'{self.conf.INPUT_FRAME_DIRECTORY}/*')
         self.output_frame_directory = glob.glob(f'{self.conf.OUTPUT_FRAME_DIRECTORY}/*')
@@ -105,16 +106,19 @@ class StyleFrame:
         ghost_frame = None
         for count, filename in enumerate(sorted(self.input_frame_directory)):
             if count % 10 == 0:
-                print(f"Output frame: {(count/len(self.input_frame_directory)):.0%}")
-            content_img = cv2.imread(filename) 
+                print(f"Output frame: {(count / len(self.input_frame_directory)):.0%}")
+            content_img = cv2.imread(filename)
             content_img = cv2.cvtColor(content_img, cv2.COLOR_BGR2RGB) / self.MAX_CHANNEL_INTENSITY
             curr_style_img_index = int(count / self.t_const)
             mix_ratio = 1 - ((count % self.t_const) / self.t_const)
             inv_mix_ratio = 1 - mix_ratio
 
             prev_image = self.transition_style_seq[curr_style_img_index]
-            next_image = self.transition_style_seq[curr_style_img_index + 1]
-            
+            if curr_style_img_index + 1 < len(self.transition_style_seq):
+                next_image = self.transition_style_seq[curr_style_img_index + 1]
+            else:
+                next_image = None
+
             prev_is_content_img = False
             next_is_content_img = False
             if prev_image is None:
@@ -128,9 +132,21 @@ class StyleFrame:
                 temp_ghost_frame = cv2.cvtColor(ghost_frame, cv2.COLOR_RGB2BGR) * self.MAX_CHANNEL_INTENSITY
                 cv2.imwrite(self.conf.OUTPUT_FRAME_PATH.format(count), temp_ghost_frame)
                 continue
-            
+
+            original_img=content_img
+            if self.apply_mask:
+                w, h, _ = content_img.shape
+                mask = np.zeros(content_img.shape)
+                mask[int(0.3 * w):int(0.7 * w), int(0.3 * h): int(0.7 * h), :] = 1
+                anti_mask = 1 - mask
+            else:
+                mask = np.ones(content_img.shape)
+                anti_mask = 1 - mask
+
             if count > 0:
+                content_img = content_img * mask
                 content_img = ((1 - self.conf.GHOST_FRAME_TRANSPARENCY) * content_img) + (self.conf.GHOST_FRAME_TRANSPARENCY * ghost_frame)
+                original_img=(1 - self.conf.GHOST_FRAME_TRANSPARENCY) * original_img
             content_img = tf.cast(tf.convert_to_tensor(content_img), tf.float32)
 
             if prev_is_content_img:
@@ -161,9 +177,18 @@ class StyleFrame:
 
             if self.conf.PRESERVE_COLORS:
                 stylized_img = self._color_correct_to_input(content_img, stylized_img)
-            
-            ghost_frame = np.asarray(self._trim_img(stylized_img))
 
+
+            if self.apply_mask:
+                stylized_img = stylized_img * mask
+                stylized_img1 = stylized_img +self._trim_img(original_img)*anti_mask
+                stylized_img = stylized_img + original_img*anti_mask
+                # temp_style = cv2.cvtColor(np.asarray(self._trim_img(stylized_img1)), cv2.COLOR_RGB2BGR) * self.MAX_CHANNEL_INTENSITY
+                # cv2.imwrite("style.jpg", temp_style)
+
+
+            ghost_frame = np.asarray(self._trim_img(stylized_img))
+            # ghost_frame=ghost_frame+anti_mask*content_img
             temp_ghost_frame = cv2.cvtColor(ghost_frame, cv2.COLOR_RGB2BGR) * self.MAX_CHANNEL_INTENSITY
             cv2.imwrite(self.conf.OUTPUT_FRAME_PATH.format(count), temp_ghost_frame)
         self.output_frame_directory = glob.glob(f'{self.conf.OUTPUT_FRAME_DIRECTORY}/*')
@@ -182,7 +207,6 @@ class StyleFrame:
         color_corrected[:, :, 2] = content[:, :, 2]
         return cv2.cvtColor(color_corrected, cv2.COLOR_YCrCb2BGR) / self.MAX_CHANNEL_INTENSITY
 
-
     def create_video(self):
         self.output_frame_directory = glob.glob(f'{self.conf.OUTPUT_FRAME_DIRECTORY}/*')
         fourcc = cv2.VideoWriter_fourcc(*'MP4V')
@@ -190,7 +214,7 @@ class StyleFrame:
 
         for count, filename in enumerate(sorted(self.output_frame_directory)):
             if count % 10 == 0:
-                print(f"Saving frame: {(count/len(self.output_frame_directory)):.0%}")
+                print(f"Saving frame: {(count / len(self.output_frame_directory)):.0%}")
             image = cv2.imread(filename)
             video_writer.write(image)
 
@@ -206,6 +230,7 @@ class StyleFrame:
         self.get_output_frames()
         print("Saving video")
         self.create_video()
+
 
 if __name__ == "__main__":
     StyleFrame().run()

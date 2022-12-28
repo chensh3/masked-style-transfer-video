@@ -6,3 +6,9 @@ venv
 *.mov
 *.mp4
 !input_vid.mov
+input_frames
+output_frames
+blend.jpg
+content.jpg
+style.jpg
+shape_predictor_68_face_landmarks.dat

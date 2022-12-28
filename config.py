@@ -18,6 +18,7 @@ class Config:
     # defines the reference style image transition sequence. Values correspond to indices in STYLE_REF_DIRECTORY
     # add None in the sequence to NOT apply style transfer for part of the video (ie. [None, 0, 1, 2])  
     STYLE_SEQUENCE = [0, 1, 2]
+    STYLE_SEQUENCE = [1]
 
     OUTPUT_FPS = 20
     OUTPUT_VIDEO_NAME = 'output_video.mp4'
@@ -31,3 +32,6 @@ class Config:
 
     TENSORFLOW_CACHE_DIRECTORY = f'{ROOT_PATH}/tensorflow_cache'
     TENSORFLOW_HUB_HANDLE = 'https://tfhub.dev/google/magenta/arbitrary-image-stylization-v1-256/2'
+
+    # apply mask
+    APPLY_MASK=True
