@@ -165,9 +165,7 @@ def read_im_and_landmarks(fname="", im=[]):
 
     return im, s
 
-
-def main(image_input):
-    save_name = 'output.jpg'
+def get_mask(image_input):
     print('===> Load image: ')
 
     im1, landmarks1 = read_im_and_landmarks(im=image_input)
@@ -177,10 +175,14 @@ def main(image_input):
         cv2.imshow('output', image_input)
         cv2.waitKey(1)
         print("no face ")
-        return
+        return [],[]
 
     mask = get_face_mask(im1, landmarks1)
+    return mask,im1
 
+def main(image_input):
+    save_name = 'output.jpg'
+    mask,im1=get_mask(image_input)
     output_im = mask * im1
     mask = mask * 255
     # put original image and output image horizontally
