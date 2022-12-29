@@ -24,6 +24,7 @@ class StyleFrame:
     def __init__(self, conf=Config):
         self.conf = conf
         self.frame_width = self.conf.FRAME_WIDTH
+        self.frame_height = self.conf.FRAME_HEIGHT
         os.environ['TFHUB_CACHE_DIR'] = self.conf.TENSORFLOW_CACHE_DIRECTORY
         time.perf_counter()
         self.hub_module = hub.load(self.conf.TENSORFLOW_HUB_HANDLE)
@@ -118,7 +119,7 @@ class StyleFrame:
                 self.transition_style_seq.append(style_refs[self.conf.STYLE_SEQUENCE[i]])
 
     def _trim_img(self, img):
-        return img[:self.conf.FRAME_HEIGHT, :self.frame_width]
+        return img[:self.frame_height, :self.frame_width]
 
     def get_output_frames(self):
         self.input_frame_directory = glob.glob(f'{self.conf.INPUT_FRAME_DIRECTORY}/*')
@@ -261,6 +262,7 @@ class StyleFrame:
                     temp_ghost_frame = ghost_frame * self.MAX_CHANNEL_INTENSITY
                 else:
                     temp_ghost_frame = cv2.cvtColor(ghost_frame, cv2.COLOR_RGB2BGR) * self.MAX_CHANNEL_INTENSITY
+
                 cv2.imshow('output', temp_ghost_frame.astype(np.uint8))
                 cv2.waitKey(1)
                 # cv2.imwrite(self.conf.OUTPUT_FRAME_PATH.format(count), temp_ghost_frame)
