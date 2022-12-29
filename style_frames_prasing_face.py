@@ -2,6 +2,7 @@
 # March 5, 2021
 import os
 import torch
+import UNET_Model
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow_hub as hub
@@ -13,6 +14,8 @@ import logging
 from config import Config
 from live_face_segment import get_mask
 from facer_prasing import face_parsing
+from skimage.transform import resize
+import time
 
 
 class StyleFrame:
@@ -22,18 +25,22 @@ class StyleFrame:
         self.conf = conf
         self.frame_width = self.conf.FRAME_WIDTH
         os.environ['TFHUB_CACHE_DIR'] = self.conf.TENSORFLOW_CACHE_DIRECTORY
+        time.perf_counter()
         self.hub_module = hub.load(self.conf.TENSORFLOW_HUB_HANDLE)
         self.input_frame_directory = glob.glob(f'{self.conf.INPUT_FRAME_DIRECTORY}/*')
         self.output_frame_directory = glob.glob(f'{self.conf.OUTPUT_FRAME_DIRECTORY}/*')
         self.style_directory = glob.glob(f'{self.conf.STYLE_REF_DIRECTORY}/*')
         self.ref_count = len(self.conf.STYLE_SEQUENCE)
         self.apply_mask = self.conf.APPLY_MASK
+        self.model_img_shape = (self.conf.IMG_HEIGHT, self.conf.IMG_WIDTH, self.conf.IMG_CHANNELS)
+        self.model_weights_path = self.conf.WEIGHTS_PATH
         files_to_be_cleared = self.output_frame_directory
         if self.conf.CLEAR_INPUT_FRAME_CACHE:
             files_to_be_cleared += self.input_frame_directory
 
         for file in files_to_be_cleared:
             os.remove(file)
+        self.model = UNET_Model.model_build(*self.model_img_shape)
 
         # Update contents of directory after deletion
         self.input_frame_directory = glob.glob(f'{self.conf.INPUT_FRAME_DIRECTORY}/*')
@@ -42,6 +49,12 @@ class StyleFrame:
         if len(self.input_frame_directory):
             # Retrieve an image in the input frame dir to get the width
             self.frame_width = cv2.imread(self.input_frame_directory[0]).shape[1]
+
+    def load_weights(self, path=""):
+        if path == "":
+            self.model.load_weights(self.model_weights_path)
+        else:
+            self.model.load_weights(path)
 
     def get_input_frames(self):
         if len(self.input_frame_directory):
@@ -75,17 +88,18 @@ class StyleFrame:
         style_refs = list()
         resized_ref = False
         style_files = sorted(self.style_directory)
+        print(style_files)
         self.t_const = frame_length if self.ref_count == 1 else np.ceil(frame_length / (self.ref_count - 1))
 
         # Open first style ref and force all other style refs to match size
         first_style_ref = cv2.imread(style_files.pop(0))
-        # first_style_ref = cv2.cvtColor(first_style_ref, cv2.COLOR_BGR2RGB)
+        first_style_ref = cv2.cvtColor(first_style_ref, cv2.COLOR_BGR2RGB)
         first_style_height, first_style_width, _rgb = first_style_ref.shape
         style_refs.append(first_style_ref / self.MAX_CHANNEL_INTENSITY)
 
         for filename in style_files:
             style_ref = cv2.imread(filename)
-            # style_ref = cv2.cvtColor(style_ref, cv2.COLOR_BGR2RGB)
+            style_ref = cv2.cvtColor(style_ref, cv2.COLOR_BGR2RGB)
             style_ref_height, style_ref_width, _rgb = style_ref.shape
             # Resize all style_ref images to match first style_ref dimensions
             if style_ref_width != first_style_width or style_ref_height != first_style_height:
@@ -157,7 +171,8 @@ class StyleFrame:
                     continue
 
                 original_img = content_img
-                if self.apply_mask=="Facer":
+                if self.apply_mask == "Facer":
+                    start = time.perf_counter()
                     temp_content = content_img * self.MAX_CHANNEL_INTENSITY
                     mask = face_parsing(torch.from_numpy(temp_content.astype('uint8')))
                     # if mask == []:
@@ -167,15 +182,29 @@ class StyleFrame:
                         mask = mask.repeat(3, 1, 1)  # c x h x w
                         mask = mask.permute(1, 2, 0)  # h x w x c
                     mask = mask.numpy()
-                    mask=np.where(mask > 0.05, 1, 0)
-                elif self.apply_mask=="Basic":
+                    mask = np.where(mask > 0.05, 1, 0)
+                    print("facer", time.perf_counter() - start)
+                elif self.apply_mask == "UNET":
+                    start = time.perf_counter()
+                    small_img = resize(original_img, self.model_img_shape[:2], mode='constant',
+                                       preserve_range=True)
+                    small_img = np.expand_dims(small_img, axis=0)
+                    mask = self.model.predict(small_img * self.MAX_CHANNEL_INTENSITY)
+                    mask = (mask > 0.5).astype(np.uint8)
+                    mask = np.squeeze(mask, axis=0)
+                    mask = resize(mask, content_img.shape, mode='constant',
+                                  preserve_range=True)
+                    print("UNET", time.perf_counter() - start)
+
+                elif self.apply_mask == "Basic":
+                    start = time.perf_counter()
                     temp_content = content_img * self.MAX_CHANNEL_INTENSITY
                     mask, _ = get_mask(temp_content.astype('uint8'))
                     if mask == []:
-                        mask = np.ones(content_img.shape)
-
+                        mask = np.zeros(content_img.shape)
+                    print("BASIC", time.perf_counter() - start)
                 else:
-                    mask = np.ones(content_img.shape)
+                    mask = np.zeros(content_img.shape)
                 anti_mask = 1 - mask
 
                 if count > 0:
@@ -196,12 +225,15 @@ class StyleFrame:
                     next_style = inv_mix_ratio * next_image
                     blended_img = prev_style + next_style
 
+                start = time.perf_counter()
+
                 blended_img = tf.cast(tf.convert_to_tensor(blended_img), tf.float32)
                 expanded_blended_img = tf.constant(tf.expand_dims(blended_img, axis=0))
                 expanded_content_img = tf.constant(tf.expand_dims(content_img, axis=0))
                 # Apply style transfer
                 stylized_img = self.hub_module(expanded_content_img, expanded_blended_img).pop()
                 stylized_img = tf.squeeze(stylized_img)
+                print("style", time.perf_counter() - start)
 
                 # Re-blend
                 if prev_is_content_img:
@@ -218,7 +250,7 @@ class StyleFrame:
 
                 if self.apply_mask != "Skip":
                     stylized_img = stylized_img * mask
-                    stylized_img1 = stylized_img + self._trim_img(original_img) * anti_mask
+                    # stylized_img1 = stylized_img + self._trim_img(original_img) * anti_mask
                     stylized_img = stylized_img + original_img * anti_mask
                     # temp_style = cv2.cvtColor(np.asarray(self._trim_img(stylized_img1)), cv2.COLOR_RGB2BGR) * self.MAX_CHANNEL_INTENSITY
                     # cv2.imwrite("style.jpg", temp_style)
@@ -246,7 +278,7 @@ class StyleFrame:
         color_corrected[:, :, 0] = generated[:, :, 0]
         color_corrected[:, :, 1] = content[:, :, 1]
         color_corrected[:, :, 2] = content[:, :, 2]
-        return cv2.cvtColor(color_corrected, cv2.COLOR_YCrCb2BGR) / self.MAX_CHANNEL_INTENSITY #[chen] changed it from RGB to BGR
+        return cv2.cvtColor(color_corrected, cv2.COLOR_YCrCb2BGR) / self.MAX_CHANNEL_INTENSITY  # [chen] changed it from RGB to BGR
 
     def create_video(self):
         self.output_frame_directory = glob.glob(f'{self.conf.OUTPUT_FRAME_DIRECTORY}/*')
@@ -263,8 +295,8 @@ class StyleFrame:
         print(f"Style transfer complete! Output at {self.conf.OUTPUT_VIDEO_PATH}")
 
     def run(self):
-        # print("Getting input frames")
-        # self.get_input_frames()
+        print("Loading Model Weights")
+        self.load_weights()
         print("Getting style info")
         self.get_style_info()
         print("Getting output frames")

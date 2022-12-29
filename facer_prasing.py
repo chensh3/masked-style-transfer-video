@@ -24,7 +24,7 @@ def face_parsing(img):
     seg_logits = faces['seg']['logits']
     seg_probs = seg_logits.softmax(dim=1)  # nfaces x nclasses x h x w
 
-    print(seg_probs.shape)
+    # print(seg_probs.shape)
     # facer.show_bhw(x.argmax(dim=1).float()/seg_logits.size(1)*255)
     skin_nose = seg_probs[:, 1, :, :] + seg_probs[:, 6, :, :]
     return skin_nose.float() / seg_logits.size(1) * 255
