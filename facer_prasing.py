@@ -11,8 +11,12 @@ def face_parsing(img):
     image = facer.hwc2bchw(img).to(device=device)  # image: 1 x 3 x h x w
 
     face_detector = facer.face_detector('retinaface/mobilenet', device=device)
-    with torch.inference_mode():
-        faces = face_detector(image)
+    try:
+        with torch.inference_mode():
+            faces = face_detector(image)
+    except RuntimeError :
+        print("No face in image")
+        return []
 
     # facer.show_bchw(facer.draw_bchw(image, faces))
 

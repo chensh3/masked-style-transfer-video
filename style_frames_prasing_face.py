@@ -1,32 +1,37 @@
 # Brycen Westgarth and Tristan Jogminas
-# March 5, 2021
+# March 5, 2021,
+# Video Style Transfer: https://github.com/westgarthb/style-transfer-video-processor
+# Basic: https://github.com/walkoncross/face-segment
+# Facer: https://github.com/FacePerceiver/facer
+# UNET:  https://github.com/MRE-Lab-UMD/abd-skin-segmentation
+
 import os
 import torch
 import UNET_Model
-
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow_hub as hub
 import numpy as np
 import tensorflow as tf
 import glob
 import cv2
-import logging
 from config import Config
 from live_face_segment import get_mask
 from facer_prasing import face_parsing
 from skimage.transform import resize
 import time
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 
 class StyleFrame:
     MAX_CHANNEL_INTENSITY = 255.0
 
     def __init__(self, conf=Config):
+        self.t_const = None
+        self.transition_style_seq = list()
         self.conf = conf
         self.frame_width = self.conf.FRAME_WIDTH
         self.frame_height = self.conf.FRAME_HEIGHT
         os.environ['TFHUB_CACHE_DIR'] = self.conf.TENSORFLOW_CACHE_DIRECTORY
-        time.perf_counter()
         self.hub_module = hub.load(self.conf.TENSORFLOW_HUB_HANDLE)
         self.input_frame_directory = glob.glob(f'{self.conf.INPUT_FRAME_DIRECTORY}/*')
         self.output_frame_directory = glob.glob(f'{self.conf.OUTPUT_FRAME_DIRECTORY}/*')
@@ -41,6 +46,8 @@ class StyleFrame:
 
         for file in files_to_be_cleared:
             os.remove(file)
+
+        # Build UNET Model
         self.model = UNET_Model.model_build(*self.model_img_shape)
 
         # Update contents of directory after deletion
@@ -127,7 +134,8 @@ class StyleFrame:
         cam = cv2.VideoCapture(0)
         cam.set(cv2.CAP_PROP_BUFFERSIZE, 2)
         count = 0
-        ghost_frame = None
+        content_img, ghost_frame, result, = None, None, False
+        prev_style, next_style = None, None
         while True:
             try:
                 # read image
@@ -176,8 +184,8 @@ class StyleFrame:
                     start = time.perf_counter()
                     temp_content = content_img * self.MAX_CHANNEL_INTENSITY
                     mask = face_parsing(torch.from_numpy(temp_content.astype('uint8')))
-                    # if mask == []:
-                    #     mask = np.ones(content_img.shape)
+                    if mask == []:
+                        mask = np.zeros(content_img.shape)
 
                     if mask.size(0) == 1:
                         mask = mask.repeat(3, 1, 1)  # c x h x w
@@ -251,10 +259,7 @@ class StyleFrame:
 
                 if self.apply_mask != "Skip":
                     stylized_img = stylized_img * mask
-                    # stylized_img1 = stylized_img + self._trim_img(original_img) * anti_mask
                     stylized_img = stylized_img + original_img * anti_mask
-                    # temp_style = cv2.cvtColor(np.asarray(self._trim_img(stylized_img1)), cv2.COLOR_RGB2BGR) * self.MAX_CHANNEL_INTENSITY
-                    # cv2.imwrite("style.jpg", temp_style)
 
                 ghost_frame = np.asarray(self._trim_img(stylized_img))
                 # ghost_frame=ghost_frame+anti_mask*content_img

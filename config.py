@@ -34,12 +34,16 @@ class Config:
     TENSORFLOW_CACHE_DIRECTORY = f'{ROOT_PATH}/tensorflow_cache'
     TENSORFLOW_HUB_HANDLE = 'https://tfhub.dev/google/magenta/arbitrary-image-stylization-v1-256/2'
 
-    APPLY_MASK = "UNET" # "Skip" - do not apply mask; "Basic" - basic face masking; "Facer" = Facer face parsing
+    # "Skip" - do not apply mask;
+    # "Basic" - basic face masking;
+    # "Facer" - Facer face parsing;
+    # "UNET" - UNET model for skin segmentation;
+    APPLY_MASK = "Facer"
 
     # Specify Image Dimensions for UNET Model
     IMG_WIDTH = 128
     IMG_HEIGHT = 128
     IMG_CHANNELS = 3
 
-    #UNET Model Path
-    WEIGHTS_PATH='model/UNET.h5'
+    # UNET Model Path
+    WEIGHTS_PATH = 'model/UNET.h5'
