@@ -16,10 +16,22 @@ class Config:
     INPUT_FRAME_PATH = f'{INPUT_FRAME_DIRECTORY}/{INPUT_FRAME_FILE}'
 
     STYLE_REF_DIRECTORY = f'{ROOT_PATH}/style_ref'
+
     # defines the reference style image transition sequence. Values correspond to indices in STYLE_REF_DIRECTORY
     # add None in the sequence to NOT apply style transfer for part of the video (ie. [None, 0, 1, 2])  
     # STYLE_SEQUENCE = [0, 1, 2]
-    STYLE_SEQUENCE = [1]
+    STYLE_IMAGE = [6]
+    # style density
+    STYLE_DENSITY = 0.8
+
+
+    # "Skip" - do not apply mask;
+    # "Basic" - basic face masking;
+    # "Facer" - Facer face parsing;
+    # "UNET" - UNET model for skin segmentation;
+    APPLY_MASK = "UNET"
+
+
 
     OUTPUT_FPS = 20
     OUTPUT_VIDEO_NAME = 'output_video.mp4'
@@ -34,11 +46,6 @@ class Config:
     TENSORFLOW_CACHE_DIRECTORY = f'{ROOT_PATH}/tensorflow_cache'
     TENSORFLOW_HUB_HANDLE = 'https://tfhub.dev/google/magenta/arbitrary-image-stylization-v1-256/2'
 
-    # "Skip" - do not apply mask;
-    # "Basic" - basic face masking;
-    # "Facer" - Facer face parsing;
-    # "UNET" - UNET model for skin segmentation;
-    APPLY_MASK = "Facer"
 
     # Specify Image Dimensions for UNET Model
     IMG_WIDTH = 128

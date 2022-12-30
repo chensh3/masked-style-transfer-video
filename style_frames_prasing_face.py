@@ -36,10 +36,11 @@ class StyleFrame:
         self.input_frame_directory = glob.glob(f'{self.conf.INPUT_FRAME_DIRECTORY}/*')
         self.output_frame_directory = glob.glob(f'{self.conf.OUTPUT_FRAME_DIRECTORY}/*')
         self.style_directory = glob.glob(f'{self.conf.STYLE_REF_DIRECTORY}/*')
-        self.ref_count = len(self.conf.STYLE_SEQUENCE)
+        self.ref_count = len(self.conf.STYLE_IMAGE)
         self.apply_mask = self.conf.APPLY_MASK
         self.model_img_shape = (self.conf.IMG_HEIGHT, self.conf.IMG_WIDTH, self.conf.IMG_CHANNELS)
         self.model_weights_path = self.conf.WEIGHTS_PATH
+        self.style_dens = self.conf.STYLE_DENSITY
         files_to_be_cleared = self.output_frame_directory
         if self.conf.CLEAR_INPUT_FRAME_CACHE:
             files_to_be_cleared += self.input_frame_directory
@@ -93,45 +94,23 @@ class StyleFrame:
     def get_style_info(self):
         # frame_length = len(self.input_frame_directory)
         frame_length = 1
-        style_refs = list()
-        resized_ref = False
         style_files = sorted(self.style_directory)
         print(style_files)
         self.t_const = frame_length if self.ref_count == 1 else np.ceil(frame_length / (self.ref_count - 1))
 
+
         # Open first style ref and force all other style refs to match size
-        first_style_ref = cv2.imread(style_files.pop(0))
+        first_style_ref = cv2.imread(style_files[self.conf.STYLE_IMAGE[0]])
         first_style_ref = cv2.cvtColor(first_style_ref, cv2.COLOR_BGR2RGB)
-        first_style_height, first_style_width, _rgb = first_style_ref.shape
-        style_refs.append(first_style_ref / self.MAX_CHANNEL_INTENSITY)
+        self.transition_style_seq=[first_style_ref / self.MAX_CHANNEL_INTENSITY]
 
-        for filename in style_files:
-            style_ref = cv2.imread(filename)
-            style_ref = cv2.cvtColor(style_ref, cv2.COLOR_BGR2RGB)
-            style_ref_height, style_ref_width, _rgb = style_ref.shape
-            # Resize all style_ref images to match first style_ref dimensions
-            if style_ref_width != first_style_width or style_ref_height != first_style_height:
-                resized_ref = True
-                style_ref = cv2.resize(style_ref, (first_style_width, first_style_height))
-            style_refs.append(style_ref / self.MAX_CHANNEL_INTENSITY)
-
-        if resized_ref:
-            print("WARNING: Resizing style images which may cause distortion. To avoid this, please provide style images with the same dimensions")
-
-        self.transition_style_seq = list()
-        for i in range(self.ref_count):
-            if self.conf.STYLE_SEQUENCE[i] is None:
-                self.transition_style_seq.append(None)
-            else:
-                self.transition_style_seq.append(style_refs[self.conf.STYLE_SEQUENCE[i]])
 
     def _trim_img(self, img):
         return img[:self.frame_height, :self.frame_width]
 
     def get_output_frames(self):
-        self.input_frame_directory = glob.glob(f'{self.conf.INPUT_FRAME_DIRECTORY}/*')
-
         cam = cv2.VideoCapture(0)
+        cam.set(cv2.CAP_PROP_FPS, 20/6)
         cam.set(cv2.CAP_PROP_BUFFERSIZE, 2)
         count = 0
         content_img, ghost_frame, result, = None, None, False
@@ -140,6 +119,7 @@ class StyleFrame:
             try:
                 # read image
                 result, content_img = cam.read()
+                start_read = time.perf_counter()
 
             except Exception as e:
                 print("There may be a problem with the camera, please ensure that no other application is using it.")
@@ -174,10 +154,10 @@ class StyleFrame:
                     next_image = content_img
                     next_is_content_img = True
                 # If both, don't need to apply style transfer
-                if prev_is_content_img and next_is_content_img:
-                    temp_ghost_frame = cv2.cvtColor(ghost_frame, cv2.COLOR_RGB2BGR) * self.MAX_CHANNEL_INTENSITY
-                    cv2.imwrite(self.conf.OUTPUT_FRAME_PATH.format(count), temp_ghost_frame)
-                    continue
+                # if prev_is_content_img and next_is_content_img:
+                #     temp_ghost_frame = cv2.cvtColor(ghost_frame, cv2.COLOR_RGB2BGR) * self.MAX_CHANNEL_INTENSITY
+                #     cv2.imwrite(self.conf.OUTPUT_FRAME_PATH.format(count), temp_ghost_frame)
+                #     continue
 
                 original_img = content_img
                 if self.apply_mask == "Facer":
@@ -190,7 +170,7 @@ class StyleFrame:
                     if mask.size(0) == 1:
                         mask = mask.repeat(3, 1, 1)  # c x h x w
                         mask = mask.permute(1, 2, 0)  # h x w x c
-                    mask = mask.numpy()
+                    mask = mask.cpu().numpy()
                     mask = np.where(mask > 0.05, 1, 0)
                     print("facer", time.perf_counter() - start)
                 elif self.apply_mask == "UNET":
@@ -223,19 +203,19 @@ class StyleFrame:
                     else:
                         content_img = ((1 - self.conf.GHOST_FRAME_TRANSPARENCY) * content_img)
                     original_img = (1 - self.conf.GHOST_FRAME_TRANSPARENCY) * original_img
-                content_img = tf.cast(tf.convert_to_tensor(content_img), tf.float32)
+
                 count += 1
                 if prev_is_content_img:
                     blended_img = next_image
                 elif next_is_content_img:
-                    blended_img = prev_image
+                    blended_img = resize(prev_image, original_img.shape, mode='constant', preserve_range=True) * self.style_dens + content_img * (1 - self.style_dens)
                 else:
                     prev_style = mix_ratio * prev_image
                     next_style = inv_mix_ratio * next_image
                     blended_img = prev_style + next_style
 
                 start = time.perf_counter()
-
+                content_img = tf.cast(tf.convert_to_tensor(content_img), tf.float32)
                 blended_img = tf.cast(tf.convert_to_tensor(blended_img), tf.float32)
                 expanded_blended_img = tf.constant(tf.expand_dims(blended_img, axis=0))
                 expanded_content_img = tf.constant(tf.expand_dims(content_img, axis=0))
