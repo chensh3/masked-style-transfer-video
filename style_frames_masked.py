@@ -8,7 +8,7 @@ import numpy as np
 import tensorflow as tf
 import glob
 import cv2
-from config import Config
+from default_config import Config
 from live_face_segment import get_mask
 from facer_prasing import face_parsing
 from skimage.transform import resize
