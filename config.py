@@ -24,7 +24,7 @@ class Config:
 
     # Percentage of dimming the background
     GHOST_FRAME_TRANSPARENCY = 0.1
-    PRESERVE_COLORS = False
+    PRESERVE_COLORS = True
 
     TENSORFLOW_CACHE_DIRECTORY = f'{ROOT_PATH}/tensorflow_cache'
     TENSORFLOW_HUB_HANDLE = 'https://tfhub.dev/google/magenta/arbitrary-image-stylization-v1-256/2'

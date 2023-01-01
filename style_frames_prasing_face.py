@@ -63,9 +63,8 @@ class StyleFrame:
 
     def get_output_frames(self):
         cam = cv2.VideoCapture(0)
-        cam.set(cv2.CAP_PROP_FPS, 20 / 6)
+        # cam.set(cv2.CAP_PROP_FPS, 20 / 6)
         cam.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-        count = 0
         content_img, ghost_frame, result, = None, None, False
         while True:
             try:
@@ -80,11 +79,7 @@ class StyleFrame:
 
             if result and content_img is not None:
                 content_img = cv2.cvtColor(content_img, cv2.COLOR_BGR2RGB) / self.MAX_CHANNEL_INTENSITY
-                curr_style_img_index = int(count / self.t_const) if len(self.transition_style_seq) > 1 else 0
-                mix_ratio = 1 - ((count % self.t_const) / self.t_const)
-                inv_mix_ratio = 1 - mix_ratio
-
-                prev_image = self.transition_style_seq[curr_style_img_index]
+                style_image = self.transition_style_seq[0]
 
                 original_img = content_img
                 if self.apply_mask == "Facer":
@@ -122,17 +117,8 @@ class StyleFrame:
                     mask = np.zeros(content_img.shape)
                 anti_mask = 1 - mask
 
-                if count > 0:
-                    content_img = content_img * mask
-                    if ghost_frame is not None:
-                        content_img = ((1 - self.conf.GHOST_FRAME_TRANSPARENCY) * content_img) + (self.conf.GHOST_FRAME_TRANSPARENCY * ghost_frame)
-                    else:
-                        content_img = ((1 - self.conf.GHOST_FRAME_TRANSPARENCY) * content_img)
-                    original_img = (1 - self.conf.GHOST_FRAME_TRANSPARENCY) * original_img
-
-                count += 1
                 # Weakening the style transfer density
-                blended_img = resize(prev_image, original_img.shape, mode='constant', preserve_range=True) * self.style_dens + content_img * (1 - self.style_dens)
+                blended_img = resize(style_image, original_img.shape, mode='constant', preserve_range=True) * self.style_dens + content_img * (1 - self.style_dens)
 
                 start = time.perf_counter()
                 content_img = tf.cast(tf.convert_to_tensor(content_img), tf.float32)
@@ -144,23 +130,34 @@ class StyleFrame:
                 stylized_img = tf.squeeze(stylized_img)
                 print("style", time.perf_counter() - start)
 
-                # Re-blend
-                prev_style = mix_ratio * stylized_img
-                next_style = inv_mix_ratio * content_img
-                stylized_img = self._trim_img(prev_style) + self._trim_img(next_style)
+                if self.conf.PRESERVE_COLORS:
+                    stylized_img = self._color_correct_to_input(content_img, stylized_img)
 
                 if self.apply_mask != "Skip":
                     stylized_img = stylized_img * mask
                     stylized_img = stylized_img + original_img * anti_mask
 
-                ghost_frame = np.asarray(self._trim_img(stylized_img))
-                if self.conf.PRESERVE_COLORS:
-                    temp_ghost_frame = ghost_frame * self.MAX_CHANNEL_INTENSITY
-                else:
-                    temp_ghost_frame = cv2.cvtColor(ghost_frame, cv2.COLOR_RGB2BGR) * self.MAX_CHANNEL_INTENSITY
+                ghost_frame = np.asarray(self._trim_img(stylized_img)) * self.MAX_CHANNEL_INTENSITY
+                ghost_frame = cv2.cvtColor(ghost_frame.astype("uint8"), cv2.COLOR_RGB2BGR)
+
                 print("frame time: ", time.perf_counter() - start_read)
-                cv2.imshow('output', temp_ghost_frame.astype(np.uint8))
+                cv2.imshow("output", ghost_frame)
                 cv2.waitKey(1)
+
+    def _color_correct_to_input(self, content, generated):
+        # image manipulations for compatibility with opencv
+        content = np.array((content * self.MAX_CHANNEL_INTENSITY), dtype=np.float32)
+        content = cv2.cvtColor(content, cv2.COLOR_BGR2YCR_CB)
+        generated = np.array((generated * self.MAX_CHANNEL_INTENSITY), dtype=np.float32)
+        generated = cv2.cvtColor(generated, cv2.COLOR_BGR2YCR_CB)
+
+        generated = self._trim_img(generated)
+        # extract channels, merge intensity and color spaces
+        color_corrected = np.zeros(generated.shape, dtype=np.float32)
+        color_corrected[:, :, 0] = generated[:, :, 0]
+        color_corrected[:, :, 1] = content[:, :, 1]
+        color_corrected[:, :, 2] = content[:, :, 2]
+        return cv2.cvtColor(color_corrected, cv2.COLOR_YCrCb2BGR) / self.MAX_CHANNEL_INTENSITY  # [chen] changed it from RGB to BGR
 
     def run(self):
         print("Loading Model Weights")
