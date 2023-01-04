@@ -7,17 +7,18 @@
 
 import os
 import torch
-import UNET_Model
 import tensorflow_hub as hub
 import numpy as np
 import tensorflow as tf
 import glob
 import cv2
+import time
+import UNET_Model
 from config import Config
 from live_face_segment import get_mask
 from facer_prasing import face_parsing
 from skimage.transform import resize
-import time
+
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -33,13 +34,15 @@ class StyleFrame:
         os.environ['TFHUB_CACHE_DIR'] = self.conf.TENSORFLOW_CACHE_DIRECTORY
         self.hub_module = hub.load(self.conf.TENSORFLOW_HUB_HANDLE)
         self.style_directory = glob.glob(f'{self.conf.STYLE_REF_DIRECTORY}/*')
-        self.ref_count = len(self.conf.STYLE_IMAGE)
+        self.ref_count = len(self.conf.STYLE_IMAGE_SEQ)
         self.t_const = 1
         self.apply_mask = self.conf.APPLY_MASK
         self.model_img_shape = (self.conf.IMG_HEIGHT, self.conf.IMG_WIDTH, self.conf.IMG_CHANNELS)
         self.model_weights_path = self.conf.WEIGHTS_PATH
-        self.style_dens = self.conf.STYLE_DENSITY
-
+        self.style_dens_seq = self.conf.STYLE_DENSITY_SEQ
+        self.if_preserve_color_seq = self.conf.PRESERVE_COLORS_SEQ
+        self.to_preserve_color = False
+        self.num_frames_for_style = self.conf.NUM_FRAMES_FOR_STYLE
         # Build UNET Model
         self.model = UNET_Model.model_build(*self.model_img_shape)
 
@@ -50,22 +53,47 @@ class StyleFrame:
             self.model.load_weights(path)
 
     def get_style_info(self):
+        self.transition_style_seq = []
+        resized_ref = False
         style_files = sorted(self.style_directory)
-        print(style_files)
+        # self.t_const = frame_length if self.ref_count == 1 else np.ceil(frame_length / (self.ref_count - 1))
 
-        # Open first style ref
-        first_style_ref = cv2.imread(style_files[self.conf.STYLE_IMAGE[0]])
+        # Open first style ref and force all other style refs to match size
+        first_style_ref = cv2.imread(style_files.pop(0))
         first_style_ref = cv2.cvtColor(first_style_ref, cv2.COLOR_BGR2RGB)
-        self.transition_style_seq = [first_style_ref / self.MAX_CHANNEL_INTENSITY]
+        first_style_height, first_style_width, _rgb = first_style_ref.shape
+        self.transition_style_seq.append(first_style_ref / self.MAX_CHANNEL_INTENSITY)
+
+        for filename in style_files:
+            style_ref = cv2.imread(filename)
+            style_ref = cv2.cvtColor(style_ref, cv2.COLOR_BGR2RGB)
+            style_ref_height, style_ref_width, _rgb = style_ref.shape
+            # Resize all style_ref images to match first style_ref dimensions
+            if style_ref_width != first_style_width or style_ref_height != first_style_height:
+                resized_ref = True
+                style_ref = cv2.resize(style_ref, (first_style_width, first_style_height))
+            self.transition_style_seq.append(style_ref / self.MAX_CHANNEL_INTENSITY)
+    # def get_style_info(self):
+    #     style_files = sorted(self.style_directory)
+    #     print(style_files)
+
+    #     # Open first style ref
+    #     first_style_ref = cv2.imread(style_files[self.conf.STYLE_IMAGE_SEQ[0]])
+    #     first_style_ref = cv2.cvtColor(first_style_ref, cv2.COLOR_BGR2RGB)
+    #     self.transition_style_seq = [first_style_ref / self.MAX_CHANNEL_INTENSITY]
 
     def _trim_img(self, img):
         return img[:self.frame_height, :self.frame_width]
 
     def get_output_frames(self):
         cam = cv2.VideoCapture(0)
+        cv2.namedWindow('output', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow('output', (1200, 900))
         # cam.set(cv2.CAP_PROP_FPS, 20 / 6)
         cam.set(cv2.CAP_PROP_BUFFERSIZE, 2)
         content_img, ghost_frame, result, = None, None, False
+        i = 0
+        n_frame = 0
         while True:
             try:
                 # read image
@@ -79,7 +107,16 @@ class StyleFrame:
 
             if result and content_img is not None:
                 content_img = cv2.cvtColor(content_img, cv2.COLOR_BGR2RGB) / self.MAX_CHANNEL_INTENSITY
-                style_image = self.transition_style_seq[0]
+                if n_frame > self.num_frames_for_style or (n_frame == 0 and i == 0):
+                    # Get styling image and corresponding density and preserve color parameters
+                    if i == len(self.conf.STYLE_IMAGE_SEQ):
+                        i = 0
+                    style_image_index = self.conf.STYLE_IMAGE_SEQ[i]
+                    style_image = self.transition_style_seq[style_image_index]
+                    style_dens = self.style_dens_seq[i]
+                    self.to_preserve_color = self.if_preserve_color_seq[i]
+                    i += 1
+                    n_frame = 0
 
                 original_img = content_img
                 if self.apply_mask == "Facer":
@@ -118,7 +155,7 @@ class StyleFrame:
                 anti_mask = 1 - mask
 
                 # Weakening the style transfer density
-                blended_img = resize(style_image, original_img.shape, mode='constant', preserve_range=True) * self.style_dens + content_img * (1 - self.style_dens)
+                blended_img = resize(style_image, original_img.shape, mode='constant', preserve_range=True) * style_dens + content_img * (1 - style_dens)
 
                 start = time.perf_counter()
                 content_img = tf.cast(tf.convert_to_tensor(content_img), tf.float32)
@@ -130,7 +167,7 @@ class StyleFrame:
                 stylized_img = tf.squeeze(stylized_img)
                 print("style", time.perf_counter() - start)
 
-                if self.conf.PRESERVE_COLORS:
+                if self.to_preserve_color:
                     stylized_img = self._color_correct_to_input(content_img, stylized_img)
 
                 if self.apply_mask != "Skip":
@@ -140,9 +177,11 @@ class StyleFrame:
                 ghost_frame = np.asarray(self._trim_img(stylized_img)) * self.MAX_CHANNEL_INTENSITY
                 ghost_frame = cv2.cvtColor(ghost_frame.astype("uint8"), cv2.COLOR_RGB2BGR)
 
+                n_frame += 1
                 print("frame time: ", time.perf_counter() - start_read)
                 cv2.imshow("output", ghost_frame)
                 cv2.waitKey(1)
+
 
     def _color_correct_to_input(self, content, generated):
         # image manipulations for compatibility with opencv
