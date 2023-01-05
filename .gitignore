@@ -8,5 +8,5 @@ venv
 !input_vid.mov
 input_frames
 output_frames
-shape_predictor_68_face_landmarks.dat
+
 masks
